@@ -27,6 +27,21 @@ python test_fido2_client.py           # test using official python-fido2 library
 ## Development setup
 - Python 3.11 (`python3.11` on system path), venv in `.venv/`
 - Dependencies: `fido2`, `cryptography` (see `requirements.txt`)
+- Pico SDK at `~/pico-sdk`, env var `PICO_SDK_PATH` set in `~/.zshrc`
+- ARM cross-compiler: `arm-none-eabi-gcc` (via Homebrew)
+- micro-ecc vendored in `phase2-rp2040/lib/micro-ecc/`
+
+## Phase 2 — building and flashing
+```bash
+cd phase2-rp2040/build
+PICO_SDK_PATH=~/pico-sdk cmake ..    # configure (only needed after CMakeLists.txt changes)
+make -j$(sysctl -n hw.ncpu)          # build both targets
+# Flash: hold BOOTSEL + plug in, then:
+cp authenticator.uf2 /Volumes/RPI-RP2/   # main firmware
+cp test_crypto.uf2 /Volumes/RPI-RP2/     # crypto test with benchmarks
+# Serial monitor:
+screen /dev/cu.usbmodem* 115200          # exit: Ctrl-A then \
+```
 
 ## Project structure
 ```
@@ -36,7 +51,17 @@ phase1-python-udp/           # Phase 1 — Python reference implementation
 ├── test_client.py           # Hand-rolled test (raw packets, phishing test)
 └── test_fido2_client.py     # Test using python-fido2 library (UDP adapter)
 
-phase2-rp2040/               # Phase 2 — C firmware for RP2040 (upcoming)
+phase2-rp2040/               # Phase 2 — C firmware for RP2040
+├── CMakeLists.txt           # Build config (authenticator + test_crypto targets)
+├── include/
+│   ├── crypto.h             # Crypto module interface
+│   └── fido_mbedtls_config.h # Minimal mbedtls config (SHA-256, AES, HMAC only)
+├── src/
+│   ├── main.c               # Authenticator firmware (placeholder)
+│   ├── crypto.c             # ECDSA P-256 (micro-ecc), AES/HMAC (mbedtls)
+│   └── test_crypto.c        # Crypto test + timing benchmarks
+└── lib/
+    └── micro-ecc/           # Vendored ECDSA library
 ```
 
 ## Key conventions
