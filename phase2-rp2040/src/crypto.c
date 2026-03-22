@@ -31,6 +31,20 @@
 
 
 // -------------------------------------------------------------------------
+// Debug output — compile with -DDEBUG_CRYPTO to enable verbose printing.
+// Build the test_crypto target with: make test_crypto
+// All debug output compiles to nothing in release builds.
+// -------------------------------------------------------------------------
+#ifdef DEBUG_CRYPTO
+  #define DBG(...) printf(__VA_ARGS__)
+  #define DBG_HEX(label, data, len) crypto_print_hex(label, data, len)
+#else
+  #define DBG(...) ((void)0)
+  #define DBG_HEX(label, data, len) ((void)0)
+#endif
+
+
+// -------------------------------------------------------------------------
 // RNG — feeding entropy to micro-ecc
 // -------------------------------------------------------------------------
 // micro-ecc needs a callback that fills a buffer with random bytes.
@@ -57,7 +71,7 @@ void crypto_init(void) {
     // Register our RNG with micro-ecc. This MUST be called before
     // any key generation or signing — micro-ecc will crash without it.
     uECC_set_rng(rng_callback);
-    printf("[crypto] Initialized — RNG registered with micro-ecc\n");
+    DBG("[crypto] Initialized — RNG registered with micro-ecc\n");
 }
 
 
@@ -118,9 +132,9 @@ static void derive_wrapping_keys(const uint8_t *master_secret,
     hmac_sha256(master_secret, MASTER_SECRET_SIZE,
                 (const uint8_t *)"u2f-hmac-key", 12, hmac_key_out);
 
-    printf("  Key derivation:\n");
-    crypto_print_hex("AES key", aes_key_out, 32);
-    crypto_print_hex("HMAC key", hmac_key_out, 32);
+    DBG("  Key derivation:\n");
+    DBG_HEX("AES key", aes_key_out, 32);
+    DBG_HEX("HMAC key", hmac_key_out, 32);
 }
 
 
@@ -255,7 +269,7 @@ bool crypto_generate_keypair(uint8_t *public_key, uint8_t *private_key) {
     // and prepend the 0x04 byte.
     uint8_t raw_pub[RAW_PUBLIC_KEY_SIZE];
 
-    printf("GENERATE KEYPAIR (ECDSA P-256)\n");
+    DBG("GENERATE KEYPAIR (ECDSA P-256)\n");
 
     int ok = uECC_make_key(raw_pub, private_key, uECC_secp256r1());
     if (!ok) {
@@ -267,9 +281,9 @@ bool crypto_generate_keypair(uint8_t *public_key, uint8_t *private_key) {
     public_key[0] = 0x04;
     memcpy(public_key + 1, raw_pub, RAW_PUBLIC_KEY_SIZE);
 
-    crypto_print_hex("Private key", private_key, PRIVATE_KEY_SIZE);
-    crypto_print_hex("Public key X", public_key + 1, 32);
-    crypto_print_hex("Public key Y", public_key + 33, 32);
+    DBG_HEX("Private key", private_key, PRIVATE_KEY_SIZE);
+    DBG_HEX("Public key X", public_key + 1, 32);
+    DBG_HEX("Public key Y", public_key + 33, 32);
 
     return true;
 }
@@ -287,8 +301,8 @@ bool crypto_sign(const uint8_t *private_key,
     uint8_t hash[SHA256_SIZE];
     crypto_sha256(data, data_len, hash);
 
-    printf("ECDSA SIGN\n");
-    crypto_print_hex("Data hash (SHA-256)", hash, SHA256_SIZE);
+    DBG("ECDSA SIGN\n");
+    DBG_HEX("Data hash (SHA-256)", hash, SHA256_SIZE);
 
     // Step 2: Sign the hash with micro-ecc → 64-byte raw signature
     uint8_t raw_sig[64];
@@ -301,7 +315,7 @@ bool crypto_sign(const uint8_t *private_key,
     // Step 3: Convert raw (r||s) to DER format for U2F
     *signature_len = raw_signature_to_der(raw_sig, signature);
 
-    crypto_print_hex("Signature (DER)", signature, *signature_len);
+    DBG_HEX("Signature (DER)", signature, *signature_len);
     return true;
 }
 
@@ -320,7 +334,7 @@ bool crypto_verify(const uint8_t *public_key,
     // Decode DER signature back to raw (r||s) for micro-ecc
     uint8_t raw_sig[64];
     if (!der_decode_signature(signature, signature_len, raw_sig)) {
-        printf("  ERROR: DER decode failed\n");
+        DBG("  ERROR: DER decode failed\n");
         return false;
     }
 
@@ -339,8 +353,8 @@ bool crypto_verify(const uint8_t *public_key,
 bool crypto_wrap_key(const uint8_t *master_secret,
                      const uint8_t *private_key,
                      uint8_t *key_handle) {
-    printf("WRAP KEY — encrypting private key into key handle\n");
-    crypto_print_hex("Private key (plaintext)", private_key, PRIVATE_KEY_SIZE);
+    DBG("WRAP KEY — encrypting private key into key handle\n");
+    DBG_HEX("Private key (plaintext)", private_key, PRIVATE_KEY_SIZE);
 
     // Derive AES and HMAC keys
     uint8_t aes_key[32], hmac_key[32];
@@ -349,13 +363,13 @@ bool crypto_wrap_key(const uint8_t *master_secret,
     // Random IV
     uint8_t iv[AES_IV_SIZE];
     crypto_random(iv, AES_IV_SIZE);
-    crypto_print_hex("Random IV", iv, AES_IV_SIZE);
+    DBG_HEX("Random IV", iv, AES_IV_SIZE);
 
     // PKCS7 pad: 32 bytes → 48 bytes (adds full block of 0x10)
     uint8_t padded[48];
     size_t padded_len = pkcs7_pad(private_key, PRIVATE_KEY_SIZE, padded, sizeof(padded));
     if (padded_len == 0) return false;
-    printf("  After PKCS7 padding: %zu bytes\n", padded_len);
+    DBG("  After PKCS7 padding: %zu bytes\n", padded_len);
 
     // AES-256-CBC encrypt
     // mbedtls modifies the IV during encryption (it uses it as the running
@@ -372,7 +386,7 @@ bool crypto_wrap_key(const uint8_t *master_secret,
                            iv_copy, padded, ciphertext);
     mbedtls_aes_free(&aes);
 
-    crypto_print_hex("Ciphertext", ciphertext, padded_len);
+    DBG_HEX("Ciphertext", ciphertext, padded_len);
 
     // Assemble key handle: [IV][ciphertext][HMAC]
     memcpy(key_handle, iv, AES_IV_SIZE);
@@ -386,9 +400,9 @@ bool crypto_wrap_key(const uint8_t *master_secret,
     uint8_t *tag = key_handle + AES_IV_SIZE + padded_len;
     hmac_sha256(hmac_key, 32, hmac_input, AES_IV_SIZE + padded_len, tag);
 
-    crypto_print_hex("HMAC tag", tag, HMAC_TAG_SIZE);
-    printf("  Key handle: [IV 16][ciphertext %zu][HMAC 32] = %d bytes\n",
-           padded_len, KEY_HANDLE_SIZE);
+    DBG_HEX("HMAC tag", tag, HMAC_TAG_SIZE);
+    DBG("  Key handle: [IV 16][ciphertext %zu][HMAC 32] = %d bytes\n",
+        padded_len, KEY_HANDLE_SIZE);
 
     return true;
 }
@@ -401,7 +415,7 @@ bool crypto_wrap_key(const uint8_t *master_secret,
 bool crypto_unwrap_key(const uint8_t *master_secret,
                        const uint8_t *key_handle,
                        uint8_t *private_key) {
-    printf("UNWRAP KEY — decrypting key handle\n");
+    DBG("UNWRAP KEY — decrypting key handle\n");
 
     // Split key handle into components
     const uint8_t *iv         = key_handle;
@@ -409,9 +423,9 @@ bool crypto_unwrap_key(const uint8_t *master_secret,
     const uint8_t *tag        = key_handle + AES_IV_SIZE + 48;
     size_t ct_len = 48;  // PKCS7-padded 32 bytes
 
-    crypto_print_hex("IV", iv, AES_IV_SIZE);
-    crypto_print_hex("Ciphertext", ciphertext, ct_len);
-    crypto_print_hex("HMAC tag", tag, HMAC_TAG_SIZE);
+    DBG_HEX("IV", iv, AES_IV_SIZE);
+    DBG_HEX("Ciphertext", ciphertext, ct_len);
+    DBG_HEX("HMAC tag", tag, HMAC_TAG_SIZE);
 
     // Derive keys
     uint8_t aes_key[32], hmac_key[32];
@@ -425,7 +439,7 @@ bool crypto_unwrap_key(const uint8_t *master_secret,
     uint8_t expected_tag[HMAC_TAG_SIZE];
     hmac_sha256(hmac_key, 32, hmac_input, AES_IV_SIZE + ct_len, expected_tag);
 
-    crypto_print_hex("Expected HMAC", expected_tag, HMAC_TAG_SIZE);
+    DBG_HEX("Expected HMAC", expected_tag, HMAC_TAG_SIZE);
 
     // Constant-time comparison to prevent timing attacks.
     // (On a personal device this doesn't matter much, but it's good practice.)
@@ -434,10 +448,10 @@ bool crypto_unwrap_key(const uint8_t *master_secret,
         diff |= tag[i] ^ expected_tag[i];
     }
     if (diff != 0) {
-        printf("  HMAC MISMATCH — key handle rejected!\n");
+        DBG("  HMAC MISMATCH — key handle rejected!\n");
         return false;
     }
-    printf("  HMAC MATCH — key handle is authentic\n");
+    DBG("  HMAC MATCH — key handle is authentic\n");
 
     // Decrypt
     uint8_t iv_copy[AES_IV_SIZE];
@@ -455,13 +469,13 @@ bool crypto_unwrap_key(const uint8_t *master_secret,
     // Remove PKCS7 padding
     size_t unpadded_len = pkcs7_unpad(padded, ct_len);
     if (unpadded_len != PRIVATE_KEY_SIZE) {
-        printf("  ERROR: unexpected unpadded length %zu (expected %d)\n",
-               unpadded_len, PRIVATE_KEY_SIZE);
+        DBG("  ERROR: unexpected unpadded length %zu (expected %d)\n",
+            unpadded_len, PRIVATE_KEY_SIZE);
         return false;
     }
 
     memcpy(private_key, padded, PRIVATE_KEY_SIZE);
-    crypto_print_hex("Recovered private key", private_key, PRIVATE_KEY_SIZE);
+    DBG_HEX("Recovered private key", private_key, PRIVATE_KEY_SIZE);
 
     return true;
 }

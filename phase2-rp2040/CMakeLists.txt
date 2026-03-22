@@ -51,6 +51,7 @@ add_executable(test_crypto
 )
 target_include_directories(test_crypto PRIVATE include)
 target_link_libraries(test_crypto ${COMMON_LIBS})
+target_compile_definitions(test_crypto PRIVATE DEBUG_CRYPTO)
 pico_enable_stdio_usb(test_crypto 1)
 pico_enable_stdio_uart(test_crypto 0)
 pico_add_extra_outputs(test_crypto)
