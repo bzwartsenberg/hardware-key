@@ -5,38 +5,42 @@ DIY FIDO2/U2F hardware security key, eventually integrated into a custom mechani
 See `FIDO2_HARDWARE_KEY_PROJECT.md` for the full project plan and protocol reference.
 
 ## Current phase
-Phase 1: Python UDP authenticator (laptop only). Learning project — understanding the protocols and crypto.
+Phase 2: Port to RP2040 Pro Micro. C firmware, USB HID, on-device crypto.
 
 ## Teaching approach
 This is a learning project. When writing code:
-- Point out relevant functions and explain what they do
-- Explain the cryptography: what's being signed, why, and how it fits the FIDO2 security model
-- Connect code to protocol concepts (CTAPHID framing, U2F message format, key wrapping, etc.)
-- Explanations can be inline during coding or as a summary after
+- Phase 1 (complete): focused on protocol and crypto concepts
+- Phase 2 (current): focus on RP2040 setup, programming workflow, and microcontroller crypto
+- Berend has strong AVR/C experience but is new to RP2040 and on-device crypto
+- No need to re-explain FIDO protocol concepts unless the C implementation differs meaningfully
+
+## Phase 1 — complete
+Python U2F authenticator over UDP. Reference implementation.
+```bash
+source .venv/bin/activate
+cd phase1-python-udp
+python authenticator.py [--verbose]   # run authenticator (verbose shows all crypto steps)
+python test_client.py                 # hand-rolled test with phishing detection
+python test_fido2_client.py           # test using official python-fido2 library
+```
 
 ## Development setup
-- Python 3.11 (`python3.11` on system path), venv in `.venv/` — activate with `source .venv/bin/activate`
+- Python 3.11 (`python3.11` on system path), venv in `.venv/`
 - Dependencies: `fido2`, `cryptography` (see `requirements.txt`)
-- Target: UDP virtual FIDO device on localhost:7112
 
-## Project structure (Phase 1)
+## Project structure
 ```
-phase1-python-udp/
-├── authenticator.py      # UDP server, CTAPHID + U2F logic
-├── crypto.py             # ECDSA P-256 wrappers, key wrapping
-├── test_client.py        # Test using python-fido2
-└── requirements.txt      # (root level)
-```
+phase1-python-udp/           # Phase 1 — Python reference implementation
+├── authenticator.py         # UDP server, CTAPHID + U2F logic, --verbose mode
+├── crypto.py                # ECDSA P-256, AES key wrapping, attestation cert
+├── test_client.py           # Hand-rolled test (raw packets, phishing test)
+└── test_fido2_client.py     # Test using python-fido2 library (UDP adapter)
 
-## Commands
-```bash
-source .venv/bin/activate           # activate venv
-python phase1-python-udp/authenticator.py  # run the authenticator
-python phase1-python-udp/test_client.py    # run tests against it
+phase2-rp2040/               # Phase 2 — C firmware for RP2040 (upcoming)
 ```
 
 ## Key conventions
 - All crypto uses ECDSA P-256 (secp256r1) as required by FIDO
-- Key handles use AES-256 wrapping of per-site private keys with device master secret
+- Key handles use AES-256-CBC wrapping with HMAC-SHA256 integrity
 - Attestation cert is self-signed (fine for personal use)
-- CTAPHID packets are always 64 bytes, sent over UDP on port 7112
+- CTAPHID packets are always 64 bytes
