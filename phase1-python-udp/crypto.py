@@ -14,6 +14,9 @@ All FIDO authenticators must use ECDSA with the NIST P-256 curve
 import os
 import hashlib
 import hmac
+import logging
+
+log = logging.getLogger("u2f.crypto")
 
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import hashes, serialization
@@ -79,6 +82,10 @@ def _derive_wrapping_keys(master_secret: bytes) -> tuple[bytes, bytes]:
     """
     aes_key = hmac.new(master_secret, b"u2f-aes-key", hashlib.sha256).digest()
     hmac_key = hmac.new(master_secret, b"u2f-hmac-key", hashlib.sha256).digest()
+    log.debug("  Key derivation:")
+    log.debug("    master_secret:  %s", master_secret.hex())
+    log.debug("    label 'u2f-aes-key'  → AES key:  %s", aes_key.hex())
+    log.debug("    label 'u2f-hmac-key' → HMAC key: %s", hmac_key.hex())
     return aes_key, hmac_key
 
 
@@ -99,27 +106,37 @@ def wrap_key(master_secret: bytes, private_key_bytes: bytes) -> bytes:
     5. HMAC the IV + ciphertext for integrity
     6. Return IV + ciphertext + HMAC tag
     """
+    log.debug("WRAP KEY — encrypting private key into key handle")
+    log.debug("  Private key (plaintext): %s", private_key_bytes.hex())
     aes_key, hmac_key = _derive_wrapping_keys(master_secret)
 
     # Random IV — never reuse an IV with the same key
     iv = os.urandom(16)
+    log.debug("  Random IV: %s", iv.hex())
 
     # PKCS7 padding: AES-CBC requires input to be a multiple of 16 bytes.
     # Our private key is 32 bytes (already aligned), but PKCS7 always adds
     # padding (a full block of 0x10 bytes when input is already aligned).
     padder = sym_padding.PKCS7(128).padder()
     padded = padder.update(private_key_bytes) + padder.finalize()
+    log.debug("  After PKCS7 padding: %s (%d bytes)", padded.hex(), len(padded))
 
     # Encrypt
     cipher = Cipher(algorithms.AES(aes_key), modes.CBC(iv))
     encryptor = cipher.encryptor()
     ciphertext = encryptor.update(padded) + encryptor.finalize()
+    log.debug("  AES-256-CBC ciphertext: %s (%d bytes)", ciphertext.hex(), len(ciphertext))
 
     # HMAC for integrity — covers both IV and ciphertext so neither
     # can be tampered with
     tag = hmac.new(hmac_key, iv + ciphertext, hashlib.sha256).digest()
+    log.debug("  HMAC-SHA256(IV + ciphertext): %s", tag.hex())
 
-    return iv + ciphertext + tag
+    key_handle = iv + ciphertext + tag
+    log.debug("  Final key handle: [IV %d bytes][ciphertext %d bytes][HMAC %d bytes] = %d bytes total",
+              len(iv), len(ciphertext), len(tag), len(key_handle))
+
+    return key_handle
 
 
 def unwrap_key(master_secret: bytes, key_handle: bytes) -> bytes | None:
@@ -129,28 +146,39 @@ def unwrap_key(master_secret: bytes, key_handle: bytes) -> bytes | None:
     Returns None if the HMAC check fails (tampered or wrong master secret).
     This is how the authenticator detects key handles that don't belong to it.
     """
+    log.debug("UNWRAP KEY — decrypting key handle back to private key")
+    log.debug("  Key handle: %s (%d bytes)", key_handle.hex(), len(key_handle))
     aes_key, hmac_key = _derive_wrapping_keys(master_secret)
 
     # Split the key handle into its components
     iv = key_handle[:16]
     tag = key_handle[-32:]
     ciphertext = key_handle[16:-32]
+    log.debug("  Split → IV: %s", iv.hex())
+    log.debug("  Split → ciphertext: %s (%d bytes)", ciphertext.hex(), len(ciphertext))
+    log.debug("  Split → HMAC tag: %s", tag.hex())
 
     # Verify HMAC first — ALWAYS verify before decrypting.
     # This is the "authenticate then decrypt" pattern. If we decrypted
     # first, we'd be operating on potentially tampered data.
     expected_tag = hmac.new(hmac_key, iv + ciphertext, hashlib.sha256).digest()
+    log.debug("  Expected HMAC:  %s", expected_tag.hex())
+    log.debug("  Received HMAC:  %s", tag.hex())
     if not hmac.compare_digest(tag, expected_tag):
+        log.debug("  HMAC MISMATCH — key handle rejected (wrong device or tampered)")
         return None
+    log.debug("  HMAC MATCH — key handle is authentic")
 
     # Decrypt
     cipher = Cipher(algorithms.AES(aes_key), modes.CBC(iv))
     decryptor = cipher.decryptor()
     padded = decryptor.update(ciphertext) + decryptor.finalize()
+    log.debug("  Decrypted (with padding): %s", padded.hex())
 
     # Remove PKCS7 padding
     unpadder = sym_padding.PKCS7(128).unpadder()
     private_key_bytes = unpadder.update(padded) + unpadder.finalize()
+    log.debug("  Recovered private key: %s", private_key_bytes.hex())
 
     return private_key_bytes
 
@@ -194,6 +222,14 @@ def generate_key_pair() -> tuple[bytes, bytes]:
         serialization.PublicFormat.UncompressedPoint,
     )
 
+    pub_nums = private_key.public_key().public_numbers()
+    log.debug("GENERATE KEYPAIR (ECDSA P-256)")
+    log.debug("  Private key (scalar): %s", private_key_bytes.hex())
+    log.debug("  Public key X: %s", pub_nums.x.to_bytes(32, 'big').hex())
+    log.debug("  Public key Y: %s", pub_nums.y.to_bytes(32, 'big').hex())
+    log.debug("  Public key (uncompressed, 0x04||X||Y): %s (%d bytes)",
+              public_key_bytes.hex(), len(public_key_bytes))
+
     return private_key_bytes, public_key_bytes
 
 
@@ -219,8 +255,14 @@ def sign(private_key_bytes: bytes, data: bytes) -> bytes:
     the fixed 64-byte "raw" format. U2F uses DER because that's what
     the original spec chose (inherited from older smart card standards).
     """
+    log.debug("ECDSA SIGN")
+    log.debug("  Private key: %s", private_key_bytes.hex())
+    log.debug("  Data to sign (%d bytes): %s", len(data), data.hex())
+    log.debug("  (data will be SHA-256 hashed internally before signing)")
     key = private_key_from_bytes(private_key_bytes)
-    return key.sign(data, ec.ECDSA(hashes.SHA256()))
+    signature = key.sign(data, ec.ECDSA(hashes.SHA256()))
+    log.debug("  Signature (DER): %s (%d bytes)", signature.hex(), len(signature))
+    return signature
 
 
 def verify(public_key_bytes: bytes, signature: bytes, data: bytes) -> bool:
@@ -263,6 +305,7 @@ def generate_attestation_cert() -> tuple[bytes, ec.EllipticCurvePrivateKey]:
     U2F expects DER-encoded certificates, not PEM. DER is the raw binary
     ASN.1 encoding; PEM is just base64-wrapped DER with header/footer lines.
     """
+    log.debug("GENERATE ATTESTATION CERT (self-signed X.509)")
     # Generate the attestation keypair (separate from any per-site keys)
     private_key = ec.generate_private_key(ec.SECP256R1())
 
@@ -283,4 +326,14 @@ def generate_attestation_cert() -> tuple[bytes, ec.EllipticCurvePrivateKey]:
     )
 
     cert_der = cert.public_bytes(serialization.Encoding.DER)
+
+    att_pub = private_key.public_key().public_bytes(
+        serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint,
+    )
+    log.debug("  Attestation private key: %s",
+              private_key.private_numbers().private_value.to_bytes(32, 'big').hex())
+    log.debug("  Attestation public key:  %s", att_pub.hex())
+    log.debug("  Certificate subject: CN=DIY FIDO U2F Authenticator, O=Homemade")
+    log.debug("  Certificate DER: %d bytes", len(cert_der))
+
     return cert_der, private_key

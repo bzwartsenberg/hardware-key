@@ -12,11 +12,15 @@ Two layers live here:
    the crypto layer to generate credentials and sign challenges.
 """
 
+import argparse
+import logging
 import socket
 import struct
 import hashlib
 
 import crypto
+
+log = logging.getLogger("u2f.authenticator")
 
 # ---------------------------------------------------------------------------
 # CTAPHID constants
@@ -174,6 +178,10 @@ class CTAPHIDLayer:
         new_cid = self._next_cid
         self._next_cid += 1
 
+        log.debug("CTAPHID INIT")
+        log.debug("  Client nonce: %s", nonce.hex())
+        log.debug("  Assigned channel ID: 0x%08X", new_cid)
+
         response = nonce + struct.pack(">I", new_cid)
         # Version info: protocol 2, device version 0.0.1, no special capabilities
         response += struct.pack("BBBB", 2, 0, 0, 1)
@@ -293,12 +301,17 @@ class U2FAuthenticator:
         challenge_param = data[:32]    # Hash of the challenge
         app_param = data[32:64]        # Hash of the origin
 
+        log.debug("U2F REGISTER")
+        log.debug("  Challenge param (SHA-256 of client data): %s", challenge_param.hex())
+        log.debug("  App param (SHA-256 of origin):            %s", app_param.hex())
+
         # Generate a fresh keypair for this credential
         private_key_bytes, public_key_bytes = crypto.generate_key_pair()
 
         # Wrap the private key into a key handle — this is the "store it
         # on the relying party's side" trick we discussed
         key_handle = crypto.wrap_key(self.master_secret, private_key_bytes)
+        log.debug("  Key handle (%d bytes): %s", len(key_handle), key_handle.hex())
 
         # Build the data that gets signed by the attestation key.
         # The 0x00 prefix is just a reserved byte required by the spec.
@@ -310,6 +323,13 @@ class U2FAuthenticator:
             + public_key_bytes
         )
 
+        log.debug("  Attestation sig_base (%d bytes):", len(sig_base))
+        log.debug("    0x00 (reserved)")
+        log.debug("    + app_param:      %s", app_param.hex())
+        log.debug("    + challenge_param: %s", challenge_param.hex())
+        log.debug("    + key_handle:      %s...(%d bytes)", key_handle[:16].hex(), len(key_handle))
+        log.debug("    + public_key:      %s...(%d bytes)", public_key_bytes[:16].hex(), len(public_key_bytes))
+
         # Sign with the attestation key (NOT the per-site key).
         # This signature says: "I, this specific authenticator, created
         # this credential." The relying party can check it against the
@@ -319,6 +339,7 @@ class U2FAuthenticator:
         attestation_sig = self.attestation_key.sign(
             sig_base, _ec.ECDSA(_hashes.SHA256())
         )
+        log.debug("  Attestation signature (DER): %s (%d bytes)", attestation_sig.hex(), len(attestation_sig))
 
         # Assemble the response
         response = bytearray()
@@ -328,6 +349,10 @@ class U2FAuthenticator:
         response.extend(key_handle)                   # The encrypted private key
         response.extend(self.attestation_cert_der)    # X.509 cert
         response.extend(attestation_sig)              # Attestation signature
+
+        log.debug("  Response assembled: 0x05 + pubkey(%d) + kh_len(1) + kh(%d) + cert(%d) + sig(%d) = %d bytes",
+                  len(public_key_bytes), len(key_handle), len(self.attestation_cert_der),
+                  len(attestation_sig), len(response))
 
         return bytes(response) + self._status(SW_NO_ERROR)
 
@@ -369,16 +394,26 @@ class U2FAuthenticator:
         kh_len = data[64]
         key_handle = data[65:65 + kh_len]
 
+        mode_name = {AUTH_CHECK: "CHECK_ONLY", AUTH_ENFORCE: "ENFORCE"}.get(control, f"UNKNOWN(0x{control:02X})")
+        log.debug("U2F AUTHENTICATE (mode=%s)", mode_name)
+        log.debug("  Challenge param: %s", challenge_param.hex())
+        log.debug("  App param:       %s", app_param.hex())
+        log.debug("  Key handle (%d bytes): %s", kh_len, key_handle.hex())
+
         # Try to unwrap the key handle. If this fails, the key handle
         # doesn't belong to us (wrong master secret or tampered).
         private_key_bytes = crypto.unwrap_key(self.master_secret, key_handle)
         if private_key_bytes is None:
+            log.debug("  Key handle REJECTED — not ours or tampered")
             return self._status(SW_WRONG_DATA)
+
+        log.debug("  Key handle accepted — private key recovered")
 
         # Check-only mode: "yes I know this key handle, but don't sign"
         # We return CONDITIONS_NOT_SATISFIED which, confusingly, means
         # "yes this is mine" in check-only mode. The spec is weird here.
         if control == AUTH_CHECK:
+            log.debug("  Check-only mode — returning 'yes I know this handle' (0x6985)")
             return self._status(SW_CONDITIONS_NOT_SATISFIED)
 
         if control != AUTH_ENFORCE:
@@ -389,17 +424,25 @@ class U2FAuthenticator:
         # User presence: on a real device, this would wait for a button
         # press. We just auto-approve. The 0x01 byte means "user present."
         user_presence = b'\x01'
+        log.debug("  User presence: 0x01 (auto-approved, no button in Phase 1)")
 
         # Increment and encode the counter
         self.counter += 1
         counter_bytes = struct.pack(">I", self.counter)
+        log.debug("  Counter: %d → %s", self.counter, counter_bytes.hex())
 
         # Build the data to sign:
         # app_param (32) || user_presence (1) || counter (4) || challenge_param (32)
         sig_base = app_param + user_presence + counter_bytes + challenge_param
+        log.debug("  Signature base (%d bytes):", len(sig_base))
+        log.debug("    app_param:       %s", app_param.hex())
+        log.debug("    + user_presence: 01")
+        log.debug("    + counter:       %s", counter_bytes.hex())
+        log.debug("    + challenge:     %s", challenge_param.hex())
 
         # Sign with the per-site private key (unwrapped from the key handle)
         signature = crypto.sign(private_key_bytes, sig_base)
+        log.debug("  Authentication signature (DER): %s (%d bytes)", signature.hex(), len(signature))
 
         # Assemble the response
         response = user_presence + counter_bytes + signature
@@ -431,6 +474,18 @@ def main():
     continuation packets (59 bytes each). We reassemble them here
     before passing the complete message to the U2F layer.
     """
+    parser = argparse.ArgumentParser(description="FIDO U2F virtual authenticator")
+    parser.add_argument("-v", "--verbose", action="store_true",
+                        help="Show all intermediate crypto and protocol steps")
+    args = parser.parse_args()
+
+    # Set up logging: verbose mode shows every intermediate result
+    level = logging.DEBUG if args.verbose else logging.WARNING
+    logging.basicConfig(
+        level=level,
+        format="%(message)s",  # Clean output — just the message, no timestamps
+    )
+
     ctap = CTAPHIDLayer()
     u2f = U2FAuthenticator()
 
@@ -439,6 +494,8 @@ def main():
 
     print("U2F authenticator listening on UDP 127.0.0.1:7112")
     print(f"Master secret: {u2f.master_secret.hex()}")
+    if args.verbose:
+        print("VERBOSE MODE — showing all intermediate steps")
     print("Waiting for packets...")
 
     # Reassembly state: when a message spans multiple packets, we
@@ -462,11 +519,23 @@ def main():
             length = struct.unpack(">H", data[5:7])[0]
             payload = data[7:7 + min(length, 57)]
 
+            # Name lookup for readable logging
+            cmd_names = {CTAPHID_INIT: "INIT", CTAPHID_MSG: "MSG",
+                         CTAPHID_ERROR: "ERROR", CTAPHID_KEEPALIVE: "KEEPALIVE"}
+            cmd_name = cmd_names.get(cmd, f"0x{cmd:02X}")
+            log.debug("━" * 60)
+            log.debug("RECV INIT packet: channel=0x%08X cmd=%s payload_len=%d",
+                      cid, cmd_name, length)
+            log.debug("  Raw packet (%d bytes): %s", len(data), data.hex())
+
             if len(payload) >= length:
                 # Complete message in one packet — process immediately
                 full_payload = payload[:length]
+                log.debug("  Complete in one packet")
             else:
                 # Need continuation packets — buffer and wait
+                log.debug("  Need continuation packets (have %d of %d bytes)",
+                          len(payload), length)
                 pending[cid] = {
                     "cmd": cmd,
                     "length": length,
@@ -479,8 +548,12 @@ def main():
             if cid not in pending:
                 continue  # No pending message for this channel, ignore
             seq = data[4]  # Sequence number (we don't validate order here)
+            log.debug("RECV CONT packet: channel=0x%08X seq=%d", cid, seq)
+            log.debug("  Raw packet (%d bytes): %s", len(data), data.hex())
             pending[cid]["payload"].extend(data[5:])
             if len(pending[cid]["payload"]) < pending[cid]["length"]:
+                log.debug("  Still reassembling (have %d of %d bytes)",
+                          len(pending[cid]["payload"]), pending[cid]["length"])
                 continue  # Still waiting for more packets
             # Message complete — extract and clean up
             cmd = pending[cid]["cmd"]
@@ -488,6 +561,7 @@ def main():
             full_payload = bytes(pending[cid]["payload"][:length])
             addr = pending[cid]["addr"]
             del pending[cid]
+            log.debug("  Reassembly complete: %d bytes", length)
 
         # --- Full message received, dispatch ---
 
