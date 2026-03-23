@@ -16,16 +16,24 @@
 #include <stdio.h>
 #include "u2f.h"
 #include "crypto.h"
+#include "storage.h"
+#include "button.h"
+
+// User presence timeout — how long to wait for BOOTSEL press (ms)
+#define USER_PRESENCE_TIMEOUT_MS 10000
 
 // ---------------------------------------------------------------------------
 // State — persists across requests (until reboot)
 // ---------------------------------------------------------------------------
 
-static uint8_t master_secret[MASTER_SECRET_SIZE];
 static uint8_t attestation_privkey[PRIVATE_KEY_SIZE];
 static uint8_t attestation_cert[400];  // DER-encoded X.509 cert
 static size_t  attestation_cert_len;
-static uint32_t sign_counter;
+
+// Keepalive callback — set by u2f_handle_message before calling handlers.
+// Called periodically during button_wait_for_press to send CTAPHID
+// KEEPALIVE packets so the host doesn't time out.
+static void (*keepalive_fn)(void);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -218,10 +226,9 @@ static size_t build_attestation_cert(const uint8_t *pubkey_65,
 // ---------------------------------------------------------------------------
 
 void u2f_init(void) {
-    // Generate master secret — root of all key wrapping.
-    // On a real device this would be read from flash (written once at
-    // first boot). Here it's fresh each boot, like Phase 1.
-    crypto_random(master_secret, MASTER_SECRET_SIZE);
+    // Master secret and sign counter are now handled by storage.c.
+    // storage_init() (called before us) reads them from flash or
+    // generates them on first boot.
 
     // Generate attestation keypair and self-signed certificate.
     // On a real device the attestation key is burned in during
@@ -230,8 +237,6 @@ void u2f_init(void) {
     crypto_generate_keypair(attestation_pubkey, attestation_privkey);
     attestation_cert_len = build_attestation_cert(
         attestation_pubkey, attestation_privkey, attestation_cert);
-
-    sign_counter = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -263,6 +268,11 @@ static size_t handle_register(const uint8_t *data, size_t data_len,
         return write_status(response, SW_WRONG_DATA);
     }
 
+    // Wait for user presence (BOOTSEL button press)
+    if (!button_wait_for_press(USER_PRESENCE_TIMEOUT_MS, keepalive_fn)) {
+        return write_status(response, SW_CONDITIONS_NOT_SATISFIED);
+    }
+
     const uint8_t *challenge_param = data;
     const uint8_t *app_param = data + 32;
 
@@ -275,7 +285,7 @@ static size_t handle_register(const uint8_t *data, size_t data_len,
 
     // Wrap the private key into a key handle
     uint8_t key_handle[KEY_HANDLE_SIZE];
-    if (!crypto_wrap_key(master_secret, privkey, key_handle)) {
+    if (!crypto_wrap_key(storage_get_master_secret(), privkey, key_handle)) {
         return write_status(response, SW_WRONG_DATA);
     }
 
@@ -357,7 +367,7 @@ static size_t handle_authenticate(uint8_t control, const uint8_t *data,
 
     // Try to unwrap the key handle
     uint8_t privkey[PRIVATE_KEY_SIZE];
-    if (!crypto_unwrap_key(master_secret, key_handle, privkey)) {
+    if (!crypto_unwrap_key(storage_get_master_secret(), key_handle, privkey)) {
         // Key handle doesn't belong to us (wrong master secret or tampered)
         return write_status(response, SW_WRONG_DATA);
     }
@@ -376,14 +386,17 @@ static size_t handle_authenticate(uint8_t control, const uint8_t *data,
 
     // --- Normal authentication ---
 
-    // User presence: auto-approve for now. A real device would wait
-    // for a button press here. TODO: add button support (button.c)
+    // Wait for user presence (BOOTSEL button press)
+    if (!button_wait_for_press(USER_PRESENCE_TIMEOUT_MS, keepalive_fn)) {
+        memset(privkey, 0, sizeof(privkey));
+        return write_status(response, SW_CONDITIONS_NOT_SATISFIED);
+    }
     uint8_t user_presence = 0x01;
 
-    // Increment counter
-    sign_counter++;
+    // Increment counter (persisted to flash)
+    storage_increment_counter();
     uint8_t counter_bytes[4];
-    write_be32(counter_bytes, sign_counter);
+    write_be32(counter_bytes, storage_get_counter());
 
     // Build the data to sign:
     // app_param(32) || user_presence(1) || counter(4) || challenge_param(32) = 69 bytes
@@ -418,7 +431,9 @@ static size_t handle_authenticate(uint8_t control, const uint8_t *data,
 // ---------------------------------------------------------------------------
 
 size_t u2f_handle_message(const uint8_t *data, size_t data_len,
-                          uint8_t *response_buf) {
+                          uint8_t *response_buf,
+                          void (*keepalive)(void)) {
+    keepalive_fn = keepalive;
     if (data_len < 7) {
         return write_status(response_buf, SW_INS_NOT_SUPPORTED);
     }

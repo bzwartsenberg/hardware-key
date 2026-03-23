@@ -19,6 +19,7 @@
 #include "crypto.h"
 #include "ctaphid.h"
 #include "u2f.h"
+#include "storage.h"
 
 // LED on GPIO 25 (Pro Micro RP2040) — blink to show activity
 #define LED_PIN 25
@@ -43,6 +44,21 @@ static void send_packet(const uint8_t *buf) {
 }
 
 // ---------------------------------------------------------------------------
+// Keepalive — sent while waiting for user presence (button press)
+// ---------------------------------------------------------------------------
+// The active channel ID is set before calling u2f_handle_message.
+// u2f passes our send_keepalive function to button_wait_for_press,
+// which calls it every ~200ms during the wait.
+
+static uint32_t active_cid;
+
+static void send_keepalive(void) {
+    uint8_t status = 0x02;  // STATUS_UPNEEDED — "waiting for user presence"
+    ctaphid_send_response(active_cid, CTAPHID_KEEPALIVE,
+                          &status, 1, send_packet);
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -57,8 +73,11 @@ int main() {
     // time to open the port.
     sleep_ms(1000);
 
-    // Initialize subsystems
+    // Initialize subsystems — order matters:
+    // crypto first (RNG), then storage (needs RNG for first-boot secret),
+    // then CTAPHID and U2F (needs storage for master secret).
     crypto_init();
+    storage_init();
     ctaphid_init();
     u2f_init();
 
@@ -100,9 +119,10 @@ int main() {
 
         } else if (msg->cmd == CTAPHID_MSG) {
             // U2F message — pass to U2F layer
+            active_cid = msg->cid;
             uint8_t response[U2F_MAX_RESPONSE];
             size_t resp_len = u2f_handle_message(
-                msg->payload, msg->length, response);
+                msg->payload, msg->length, response, send_keepalive);
             ctaphid_send_response(msg->cid, CTAPHID_MSG,
                                   response, resp_len, send_packet);
 

@@ -46,7 +46,8 @@ screen /dev/cu.usbmodem* 115200          # exit: Ctrl-A then \
 ## Phase 2 — end-to-end testing
 The authenticator firmware communicates via raw binary CTAPHID packets over
 USB serial. A Python serial bridge translates between UDP and serial so
-the Phase 1 test clients work unchanged.
+the Phase 1 test clients work unchanged. Press BOOTSEL when LED blinks to
+approve register/authenticate requests.
 ```bash
 # Terminal 1: serial bridge (find port with ls /dev/cu.usbmodem*)
 cd phase2-rp2040/bridge
@@ -71,12 +72,16 @@ phase2-rp2040/               # Phase 2 — C firmware for RP2040
 │   ├── crypto.h             # Crypto module interface
 │   ├── ctaphid.h            # CTAPHID transport layer interface
 │   ├── u2f.h                # U2F application layer interface
+│   ├── storage.h            # Flash persistence interface
+│   ├── button.h             # User presence (BOOTSEL button)
 │   └── fido_mbedtls_config.h # Minimal mbedtls config (SHA-256, AES, HMAC only)
 ├── src/
 │   ├── main.c               # Authenticator firmware — serial packet loop
 │   ├── crypto.c             # ECDSA P-256 (micro-ecc), AES/HMAC (mbedtls)
 │   ├── ctaphid.c            # CTAPHID packet framing and channel management
 │   ├── u2f.c                # U2F register/authenticate + attestation cert
+│   ├── storage.c            # Flash persistence (master secret + sign counter)
+│   ├── button.c             # BOOTSEL button reading + LED feedback
 │   └── test_crypto.c        # Crypto test + timing benchmarks
 ├── bridge/
 │   └── serial_bridge.py     # UDP <-> serial forwarder for testing
@@ -91,3 +96,6 @@ phase2-rp2040/               # Phase 2 — C firmware for RP2040
 - CTAPHID packets are always 64 bytes
 - Authenticator firmware produces no text output — serial is binary-only
 - DEBUG_CRYPTO compile flag enables verbose crypto output (test_crypto target only)
+- Master secret persists in flash — survives power cycles, lost on reflash
+- Sign counter uses log-structured flash writes (~1014 auths between erases)
+- User presence requires BOOTSEL press; LED blinks during wait; KEEPALIVE packets sent to host

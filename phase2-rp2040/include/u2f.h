@@ -31,14 +31,16 @@
 // Functions
 // ---------------------------------------------------------------------------
 
-// Initialize the U2F layer: generate master secret, attestation keypair,
-// and self-signed attestation certificate. Call once at startup after
-// crypto_init().
+// Initialize the U2F layer: generate attestation keypair and self-signed
+// certificate. Call once at startup after crypto_init() and storage_init().
 void u2f_init(void);
 
 // Handle a complete U2F APDU message (the payload from a CTAPHID_MSG).
 // Writes the response into response_buf and returns the response length.
+// The keepalive callback is called periodically while waiting for user
+// presence — use it to send CTAPHID KEEPALIVE packets.
 size_t u2f_handle_message(const uint8_t *data, size_t data_len,
-                          uint8_t *response_buf);
+                          uint8_t *response_buf,
+                          void (*keepalive)(void));
 
 #endif // U2F_H

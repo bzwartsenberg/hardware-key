@@ -38,10 +38,12 @@ add_executable(authenticator
     src/main.c
     src/ctaphid.c
     src/u2f.c
+    src/storage.c
+    src/button.c
     ${COMMON_SOURCES}
 )
 target_include_directories(authenticator PRIVATE include)
-target_link_libraries(authenticator ${COMMON_LIBS})
+target_link_libraries(authenticator ${COMMON_LIBS} hardware_flash hardware_sync)
 pico_enable_stdio_usb(authenticator 1)
 pico_enable_stdio_uart(authenticator 0)
 pico_add_extra_outputs(authenticator)

@@ -83,15 +83,23 @@ screen /dev/cu.usbmodem* 115200    # exit: Ctrl-A then \
   ├── main.c       — packet I/O loop
   ├── ctaphid.c    — CTAPHID transport (framing, channels, reassembly)
   ├── u2f.c        — U2F commands (register, authenticate, attestation cert)
-  └── crypto.c     — ECDSA P-256, AES-256-CBC key wrapping, SHA-256
+  ├── crypto.c     — ECDSA P-256, AES-256-CBC key wrapping, SHA-256
+  ├── storage.c    — flash persistence (master secret + sign counter)
+  └── button.c     — user presence via BOOTSEL button
 ```
 
 ## What's next
 
-- `storage.c` — Flash persistence for master secret and sign counter
-- `button.c` — User presence via GPIO (or BOOTSEL button)
 - USB HID — Replace serial bridge with native USB HID device class
 - Keyboard integration — Embed into a custom mechanical keyboard
+
+## Production-readiness TODOs
+
+Things to address before this becomes a real daily-use authenticator:
+
+- **Protect master secret during reflash** — Currently flashing new firmware erases the storage sector, invalidating all registered credentials. The master secret should survive firmware updates and only be erasable via an explicit factory reset.
+- **Two-sector ping-pong storage** — The flash storage has a brief window (~50ms every ~1014 authentications) where the master secret only lives in RAM during sector rebuild. Using two alternating sectors eliminates this: write to the inactive sector first, then switch. Cost: 4KB extra flash.
+- **Full CTAPHID channel multiplexing** — Currently supports one pending message at a time with no channel ID validation. For real USB HID with concurrent clients: track allocated channels, support per-channel reassembly, reject unallocated channels.
 
 ## Dependencies
 
