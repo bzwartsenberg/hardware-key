@@ -32,8 +32,12 @@ set(COMMON_SOURCES src/crypto.c)
 set(COMMON_LIBS pico_stdlib pico_rand pico_mbedtls micro_ecc)
 
 # --- Main firmware ---
+# The authenticator uses all layers: crypto, CTAPHID transport, and U2F commands.
+# No printf/debug output — the serial port carries raw binary CTAPHID packets.
 add_executable(authenticator
     src/main.c
+    src/ctaphid.c
+    src/u2f.c
     ${COMMON_SOURCES}
 )
 target_include_directories(authenticator PRIVATE include)

@@ -26,7 +26,7 @@ python test_fido2_client.py           # test using official python-fido2 library
 
 ## Development setup
 - Python 3.11 (`python3.11` on system path), venv in `.venv/`
-- Dependencies: `fido2`, `cryptography` (see `requirements.txt`)
+- Dependencies: `fido2`, `cryptography`, `pyserial` (see `requirements.txt`)
 - Pico SDK at `~/pico-sdk`, env var `PICO_SDK_PATH` set in `~/.zshrc`
 - ARM cross-compiler: `arm-none-eabi-gcc` (via Homebrew)
 - micro-ecc vendored in `phase2-rp2040/lib/micro-ecc/`
@@ -39,8 +39,22 @@ make -j$(sysctl -n hw.ncpu)          # build both targets
 # Flash: hold BOOTSEL + plug in, then:
 cp authenticator.uf2 /Volumes/RPI-RP2/   # main firmware
 cp test_crypto.uf2 /Volumes/RPI-RP2/     # crypto test with benchmarks
-# Serial monitor:
+# Serial monitor (for test_crypto only):
 screen /dev/cu.usbmodem* 115200          # exit: Ctrl-A then \
+```
+
+## Phase 2 — end-to-end testing
+The authenticator firmware communicates via raw binary CTAPHID packets over
+USB serial. A Python serial bridge translates between UDP and serial so
+the Phase 1 test clients work unchanged.
+```bash
+# Terminal 1: serial bridge (find port with ls /dev/cu.usbmodem*)
+cd phase2-rp2040/bridge
+python serial_bridge.py /dev/cu.usbmodem*
+
+# Terminal 2: run test client against RP2040 via bridge
+cd phase1-python-udp
+python test_fido2_client.py
 ```
 
 ## Project structure
@@ -55,11 +69,17 @@ phase2-rp2040/               # Phase 2 — C firmware for RP2040
 ├── CMakeLists.txt           # Build config (authenticator + test_crypto targets)
 ├── include/
 │   ├── crypto.h             # Crypto module interface
+│   ├── ctaphid.h            # CTAPHID transport layer interface
+│   ├── u2f.h                # U2F application layer interface
 │   └── fido_mbedtls_config.h # Minimal mbedtls config (SHA-256, AES, HMAC only)
 ├── src/
-│   ├── main.c               # Authenticator firmware (placeholder)
+│   ├── main.c               # Authenticator firmware — serial packet loop
 │   ├── crypto.c             # ECDSA P-256 (micro-ecc), AES/HMAC (mbedtls)
+│   ├── ctaphid.c            # CTAPHID packet framing and channel management
+│   ├── u2f.c                # U2F register/authenticate + attestation cert
 │   └── test_crypto.c        # Crypto test + timing benchmarks
+├── bridge/
+│   └── serial_bridge.py     # UDP <-> serial forwarder for testing
 └── lib/
     └── micro-ecc/           # Vendored ECDSA library
 ```
@@ -69,3 +89,5 @@ phase2-rp2040/               # Phase 2 — C firmware for RP2040
 - Key handles use AES-256-CBC wrapping with HMAC-SHA256 integrity
 - Attestation cert is self-signed (fine for personal use)
 - CTAPHID packets are always 64 bytes
+- Authenticator firmware produces no text output — serial is binary-only
+- DEBUG_CRYPTO compile flag enables verbose crypto output (test_crypto target only)
