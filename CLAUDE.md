@@ -5,12 +5,12 @@ DIY FIDO2/U2F hardware security key, eventually integrated into a custom mechani
 See `FIDO2_HARDWARE_KEY_PROJECT.md` for the full project plan and protocol reference.
 
 ## Current phase
-Phase 2: Port to RP2040 Pro Micro. C firmware, USB HID, on-device crypto.
+Phase 2 complete. Native USB HID FIDO authenticator on RP2040 Pro Micro. Next: keyboard integration.
 
 ## Teaching approach
 This is a learning project. When writing code:
 - Phase 1 (complete): focused on protocol and crypto concepts
-- Phase 2 (current): focus on RP2040 setup, programming workflow, and microcontroller crypto
+- Phase 2 (complete): focus on RP2040 setup, programming workflow, and microcontroller crypto
 - Berend has strong AVR/C experience but is new to RP2040 and on-device crypto
 - No need to re-explain FIDO protocol concepts unless the C implementation differs meaningfully
 
@@ -50,6 +50,10 @@ Press BOOTSEL when LED blinks to approve register/authenticate requests.
 # Native HID test (no bridge needed):
 source .venv/bin/activate
 python test_hid.py
+
+# Browser test (Chrome or Safari):
+python3 -m http.server 8000
+# Open http://localhost:8000/test_browser.html
 
 # Legacy serial bridge test (requires re-enabling stdio_usb in CMakeLists.txt):
 cd phase2-rp2040/bridge && python serial_bridge.py /dev/cu.usbmodem*
@@ -98,4 +102,5 @@ phase2-rp2040/               # Phase 2 — C firmware for RP2040
 - DEBUG_CRYPTO compile flag enables verbose crypto output (test_crypto target only)
 - Master secret persists in flash — survives power cycles and reflash (UF2 bootloader doesn't erase storage sector)
 - Sign counter uses log-structured flash writes (~1014 auths between erases)
-- User presence requires BOOTSEL press; LED blinks during wait; KEEPALIVE packets sent to host
+- User presence requires BOOTSEL press (30s timeout); LED blinks during wait
+- No KEEPALIVE packets during button wait — Chrome's U2F path doesn't handle them (CTAP2-only feature)

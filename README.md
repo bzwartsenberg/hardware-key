@@ -58,6 +58,12 @@ python test_hid.py
 ```
 Press BOOTSEL when the LED blinks to approve register/authenticate requests.
 
+**Test with a browser:**
+```bash
+python3 -m http.server 8000
+```
+Open http://localhost:8000/test_browser.html in Chrome or Safari. Click Register, then press BOOTSEL when the LED blinks. Tested on Chrome and Safari (macOS).
+
 **Test with serial bridge (legacy):**
 The serial bridge is still available for testing with Phase 1 UDP clients. Requires building the firmware with `pico_enable_stdio_usb` re-enabled (see git history).
 
