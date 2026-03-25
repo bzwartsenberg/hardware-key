@@ -20,7 +20,7 @@
 #include "button.h"
 
 // User presence timeout — how long to wait for BOOTSEL press (ms)
-#define USER_PRESENCE_TIMEOUT_MS 10000
+#define USER_PRESENCE_TIMEOUT_MS 30000
 
 // ---------------------------------------------------------------------------
 // State — persists across requests (until reboot)

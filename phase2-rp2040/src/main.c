@@ -71,12 +71,15 @@ static void send_packet(const uint8_t *buf) {
 
 static uint32_t active_cid;
 
-static void send_keepalive(void) {
-    tud_task();  // Keep USB alive during button wait
-
-    uint8_t status = 0x02;  // STATUS_UPNEEDED
-    ctaphid_send_response(active_cid, CTAPHID_KEEPALIVE,
-                          &status, 1, send_packet);
+// Keep USB stack alive during button wait.
+// We intentionally do NOT send CTAPHID_KEEPALIVE packets here.
+// KEEPALIVE is a CTAP2 feature, but Chrome's U2F fallback path
+// doesn't recognize it and treats it as an error, aborting the
+// request. Safari and python-fido2 handle it fine, but for
+// compatibility we just keep the USB stack serviced without
+// sending any packets during the wait.
+static void usb_poll(void) {
+    tud_task();
 }
 
 // ---------------------------------------------------------------------------
@@ -155,9 +158,19 @@ int main() {
             active_cid = msg->cid;
             uint8_t response[U2F_MAX_RESPONSE];
             size_t resp_len = u2f_handle_message(
-                msg->payload, msg->length, response, send_keepalive);
+                msg->payload, msg->length, response, usb_poll);
             ctaphid_send_response(msg->cid, CTAPHID_MSG,
                                   response, resp_len, send_packet);
+
+        } else if (msg->cmd == CTAPHID_CBOR) {
+            // Chrome sends CTAP2 CBOR commands before falling back to U2F.
+            // Responding with CTAPHID_ERROR can confuse some clients.
+            // Instead, respond on the CBOR channel with a 1-byte CTAP2
+            // error status: 0x01 = CTAP1_ERR_INVALID_COMMAND.
+            // This tells Chrome "I don't speak CTAP2, try U2F."
+            uint8_t cbor_err = 0x01;
+            ctaphid_send_response(msg->cid, CTAPHID_CBOR,
+                                  &cbor_err, 1, send_packet);
 
         } else {
             ctaphid_send_error(msg->cid, ERR_INVALID_CMD, send_packet);

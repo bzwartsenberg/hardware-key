@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>FIDO U2F Key Test</title>
+    <style>
+        body { font-family: monospace; max-width: 700px; margin: 40px auto; padding: 0 20px; }
+        button { font-size: 16px; padding: 10px 20px; margin: 5px; cursor: pointer; }
+        .log { background: #1a1a1a; color: #0f0; padding: 15px; margin: 10px 0; white-space: pre-wrap; font-size: 13px; border-radius: 4px; min-height: 100px; }
+        .ok { color: #0f0; } .err { color: #f44; } .info { color: #8cf; }
+        h1 { border-bottom: 1px solid #ccc; padding-bottom: 10px; }
+    </style>
+</head>
+<body>
+    <h1>DIY FIDO U2F Key &mdash; Browser Test</h1>
+    <p>
+        This page tests your hardware key using the WebAuthn API with
+        U2F-compatible parameters (no resident key, no user verification).
+        Must be served over HTTPS or localhost.
+    </p>
+    <div>
+        <button onclick="doRegister()">1. Register</button>
+        <button onclick="doAuthenticate()" id="authBtn" disabled>2. Authenticate</button>
+    </div>
+    <div class="log" id="log"></div>
+
+    <script>
+    // Store credential between register and authenticate
+    let storedCredential = null;
+
+    const logEl = document.getElementById('log');
+    function log(msg, cls = 'info') {
+        logEl.innerHTML += `<span class="${cls}">${msg}</span>\n`;
+        logEl.scrollTop = logEl.scrollHeight;
+    }
+    function clearLog() { logEl.innerHTML = ''; }
+
+    // Random bytes helper
+    function randomBytes(n) {
+        const buf = new Uint8Array(n);
+        crypto.getRandomValues(buf);
+        return buf;
+    }
+
+    function bufToHex(buf) {
+        return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    // ---------------------------------------------------------------
+    // Register — navigator.credentials.create()
+    // ---------------------------------------------------------------
+    async function doRegister() {
+        clearLog();
+        log('=== REGISTER ===');
+        log('Press BOOTSEL when the LED blinks...\n');
+
+        try {
+            // These parameters are chosen to be U2F-compatible:
+            //
+            // - pubKeyCredParams: only ES256 (ECDSA P-256), which is
+            //   what U2F uses. CTAP2 supports more algorithms.
+            //
+            // - authenticatorSelection.residentKey: "discouraged"
+            //   U2F doesn't support resident keys (discoverable credentials).
+            //   Setting this to "discouraged" tells the browser not to
+            //   require them, so U2F-only devices can participate.
+            //
+            // - authenticatorSelection.userVerification: "discouraged"
+            //   U2F only does "user presence" (button press), not
+            //   "user verification" (PIN/biometric). Discouraged means
+            //   the browser won't require UV.
+            //
+            // - The rpId defaults to the page's origin hostname.
+
+            const challenge = randomBytes(32);
+
+            const credential = await navigator.credentials.create({
+                publicKey: {
+                    rp: { name: "DIY FIDO Test" },
+                    user: {
+                        id: randomBytes(8),
+                        name: "test@example.com",
+                        displayName: "Test User"
+                    },
+                    challenge: challenge,
+                    pubKeyCredParams: [
+                        { type: "public-key", alg: -7 },   // ES256 = ECDSA P-256
+                        { type: "public-key", alg: -257 }   // RS256 (we don't support it, but Chrome wants it listed)
+                    ],
+                    authenticatorSelection: {
+                        // "cross-platform" means external USB/NFC key,
+                        // not a built-in platform authenticator (Touch ID, etc.)
+                        authenticatorAttachment: "cross-platform",
+                        residentKey: "discouraged",
+                        userVerification: "discouraged"
+                    },
+                    timeout: 30000,
+                    attestation: "direct"  // We want the attestation cert back
+                }
+            });
+
+            storedCredential = credential;
+            document.getElementById('authBtn').disabled = false;
+
+            const response = credential.response;
+            log('Registration successful!\n', 'ok');
+            log(`Credential ID: ${bufToHex(credential.rawId).slice(0, 32)}...`);
+            log(`Client Data:   ${new TextDecoder().decode(response.clientDataJSON).slice(0, 80)}...`);
+            log(`Attestation:   ${response.attestationObject.byteLength} bytes`);
+            log('\nClick "Authenticate" to test login.', 'ok');
+
+        } catch (e) {
+            log(`Registration failed: ${e.message}`, 'err');
+            log(`\nError name: ${e.name}`, 'err');
+            if (e.name === 'NotAllowedError') {
+                log('\nThis usually means:', 'err');
+                log('  - You didn\'t press BOOTSEL in time (10s timeout)', 'err');
+                log('  - The browser couldn\'t talk to the device', 'err');
+                log('  - macOS intercepted the request', 'err');
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Authenticate — navigator.credentials.get()
+    // ---------------------------------------------------------------
+    async function doAuthenticate() {
+        clearLog();
+        log('=== AUTHENTICATE ===');
+        log('Press BOOTSEL when the LED blinks...\n');
+
+        try {
+            const challenge = randomBytes(32);
+
+            const assertion = await navigator.credentials.get({
+                publicKey: {
+                    challenge: challenge,
+                    allowCredentials: [{
+                        type: "public-key",
+                        id: storedCredential.rawId,
+                        transports: ["usb"]
+                    }],
+                    userVerification: "discouraged",
+                    timeout: 30000
+                }
+            });
+
+            const authData = new Uint8Array(assertion.response.authenticatorData);
+            // Counter is bytes 33-36 of authenticatorData (big-endian)
+            const counter = (authData[33] << 24) | (authData[34] << 16) |
+                           (authData[35] << 8) | authData[36];
+
+            log('Authentication successful!\n', 'ok');
+            log(`Credential ID: ${bufToHex(assertion.rawId).slice(0, 32)}...`);
+            log(`Counter:       ${counter}`);
+            log(`Signature:     ${bufToHex(assertion.response.signature).slice(0, 32)}...`);
+            log(`User present:  ${(authData[32] & 0x01) ? 'yes' : 'no'}`);
+
+        } catch (e) {
+            log(`Authentication failed: ${e.message}`, 'err');
+        }
+    }
+    </script>
+</body>
+</html>

@@ -19,6 +19,7 @@
 #define CTAPHID_MSG         (0x80 | 0x03)   // Carry a U2F message
 #define CTAPHID_ERROR       (0x80 | 0x3F)   // Error response
 #define CTAPHID_KEEPALIVE   (0x80 | 0x3B)   // "I'm still working"
+#define CTAPHID_CBOR        (0x80 | 0x10)   // CTAP2 CBOR command
 
 // The broadcast channel — clients send INIT here before they have a channel
 #define BROADCAST_CID       0xFFFFFFFF
