@@ -5,12 +5,13 @@ DIY FIDO2/U2F hardware security key, eventually integrated into a custom mechani
 See `FIDO2_HARDWARE_KEY_PROJECT.md` for the full project plan and protocol reference.
 
 ## Current phase
-Phase 2 complete. Native USB HID FIDO authenticator on RP2040 Pro Micro. Next: keyboard integration.
+Phase 3 complete. Native USB HID FIDO authenticator on RP2040 Pro Micro. Next: keyboard integration.
 
 ## Teaching approach
 This is a learning project. When writing code:
 - Phase 1 (complete): focused on protocol and crypto concepts
 - Phase 2 (complete): focus on RP2040 setup, programming workflow, and microcontroller crypto
+- Phase 3 (complete): USB HID — replaced serial bridge with native FIDO HID device
 - Berend has strong AVR/C experience but is new to RP2040 and on-device crypto
 - No need to re-explain FIDO protocol concepts unless the C implementation differs meaningfully
 
