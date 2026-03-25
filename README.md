@@ -90,9 +90,19 @@ screen /dev/cu.usbmodem* 115200    # exit: Ctrl-A then \
   └── button.c           — user presence via BOOTSEL button
 ```
 
-## What's next
+## What's next — Phase 4: keyboard integration
 
-- Keyboard integration — Embed into a custom mechanical keyboard (USB composite: HID keyboard + HID FIDO)
+Embed the authenticator into a QMK keyboard as a USB composite device (HID keyboard + HID FIDO on one USB connection).
+
+**Plan:**
+1. Pick a target RP2040 keyboard/PCB and determine which USB stack QMK uses for it (ChibiOS native or TinyUSB wrapper)
+2. Get QMK building and running with basic keyboard functionality
+3. Add a FIDO HID interface (usage page 0xF1D0) alongside QMK's existing keyboard interface
+4. Port the FIDO C modules (crypto, ctaphid, u2f, storage) into QMK's build — these have zero USB dependencies and should drop in cleanly
+5. Rewrite the transport layer (~50 lines) for QMK's USB stack
+6. User presence via a dedicated key instead of BOOTSEL
+
+**Fallback:** Two separate MCUs sharing USB via a hub chip (simpler isolation, more hardware).
 
 ## Production-readiness TODOs
 
