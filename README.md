@@ -104,6 +104,17 @@ Embed the authenticator into a QMK keyboard as a USB composite device (HID keybo
 
 **Fallback:** Two separate MCUs sharing USB via a hub chip (simpler isolation, more hardware).
 
+## Security considerations
+
+The master secret is stored **in plain text on the RP2040's external SPI flash chip**. The RP2040 has no internal flash — all data (firmware and secrets) lives on an external QSPI chip that can be physically read. An attacker with physical access could desolder or probe the flash chip, extract the master secret, and use it to unwrap any key handle and forge authentication signatures.
+
+For comparison, commercial FIDO keys (YubiKey, Titan) use secure elements with non-extractable internal storage. This project does not provide that level of hardware security. For a personal keyboard that lives on your desk, this is an acceptable tradeoff — extracting the secret requires targeted hardware attack AND access to the key handles (stored server-side). But if you're considering this for higher-security use cases, be aware of this limitation.
+
+Possible mitigations (not yet implemented):
+- Store the master secret in the RP2040's **OTP fuses** (one-time programmable, resistant to flash extraction, but irreversible — no factory reset)
+- Encrypt the master secret in flash using a key derived from OTP (reversible factory reset, still resistant to flash extraction)
+- Use a **secure element** (e.g. ATECC608) for key storage (strongest, but adds hardware complexity)
+
 ## Production-readiness TODOs
 
 Things to address before this becomes a real daily-use authenticator:
