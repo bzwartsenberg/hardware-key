@@ -104,6 +104,19 @@ Embed the authenticator into a QMK keyboard as a USB composite device (HID keybo
 
 **Fallback:** Two separate MCUs sharing USB via a hub chip (simpler isolation, more hardware).
 
+## Future: CTAP2/FIDO2 upgrade
+
+The device currently speaks U2F (CTAP1) only. Upgrading to CTAP2 (FIDO2) would add PIN support, eliminate Chrome's U2F fallback dance, and enable modern passwordless flows. Planned in three incremental steps:
+
+**Step 1 — CTAP2 basics (no PIN, no resident keys)**
+Add CBOR encoding/decoding (vendor nanocbor or tinycbor), implement `authenticatorGetInfo`, `authenticatorMakeCredential`, and `authenticatorGetAssertion`. Same stateless key-wrapping crypto, just a new message format. The device would advertise both `"U2F_V2"` and `"FIDO_2_0"`. This alone fixes Chrome compatibility natively — no more CTAP2→U2F fallback.
+
+**Step 2 — PIN protocol**
+CTAP2 PIN/UV uses ECDH key agreement (ephemeral keypair per session) to establish a shared secret, then the PIN is hashed client-side and encrypted before transmission. The device stores a PIN hash + retry counter in flash. All the crypto primitives we already have (ECDSA P-256, SHA-256, AES) are exactly what the PIN protocol needs. With a PIN, stealing the physical key isn't enough — you also need the PIN.
+
+**Step 3 — Resident keys (optional)**
+Enables passwordless login by storing credentials on-device (flash) instead of relying on the site to send back the key handle. Requires credential enumeration and flash storage management. Interesting but not essential for a key that lives in a keyboard.
+
 ## Security considerations
 
 The master secret is stored **in plain text on the RP2040's external SPI flash chip**. The RP2040 has no internal flash — all data (firmware and secrets) lives on an external QSPI chip that can be physically read. An attacker with physical access could desolder or probe the flash chip, extract the master secret, and use it to unwrap any key handle and forge authentication signatures.
