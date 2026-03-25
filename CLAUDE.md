@@ -43,19 +43,17 @@ cp test_crypto.uf2 /Volumes/RPI-RP2/     # crypto test with benchmarks
 screen /dev/cu.usbmodem* 115200          # exit: Ctrl-A then \
 ```
 
-## Phase 2 — end-to-end testing
-The authenticator firmware communicates via raw binary CTAPHID packets over
-USB serial. A Python serial bridge translates between UDP and serial so
-the Phase 1 test clients work unchanged. Press BOOTSEL when LED blinks to
-approve register/authenticate requests.
+## Phase 2 — testing
+The authenticator presents as a native USB HID device (FIDO usage page 0xF1D0).
+Press BOOTSEL when LED blinks to approve register/authenticate requests.
 ```bash
-# Terminal 1: serial bridge (find port with ls /dev/cu.usbmodem*)
-cd phase2-rp2040/bridge
-python serial_bridge.py /dev/cu.usbmodem*
+# Native HID test (no bridge needed):
+source .venv/bin/activate
+python test_hid.py
 
-# Terminal 2: run test client against RP2040 via bridge
-cd phase1-python-udp
-python test_fido2_client.py
+# Legacy serial bridge test (requires re-enabling stdio_usb in CMakeLists.txt):
+cd phase2-rp2040/bridge && python serial_bridge.py /dev/cu.usbmodem*
+cd phase1-python-udp && python test_fido2_client.py
 ```
 
 ## Project structure
@@ -74,14 +72,16 @@ phase2-rp2040/               # Phase 2 — C firmware for RP2040
 │   ├── u2f.h                # U2F application layer interface
 │   ├── storage.h            # Flash persistence interface
 │   ├── button.h             # User presence (BOOTSEL button)
+│   ├── tusb_config.h        # TinyUSB configuration (HID device, 64-byte reports)
 │   └── fido_mbedtls_config.h # Minimal mbedtls config (SHA-256, AES, HMAC only)
 ├── src/
-│   ├── main.c               # Authenticator firmware — serial packet loop
+│   ├── main.c               # Authenticator firmware — USB HID event loop
 │   ├── crypto.c             # ECDSA P-256 (micro-ecc), AES/HMAC (mbedtls)
 │   ├── ctaphid.c            # CTAPHID packet framing and channel management
 │   ├── u2f.c                # U2F register/authenticate + attestation cert
 │   ├── storage.c            # Flash persistence (master secret + sign counter)
 │   ├── button.c             # BOOTSEL button reading + LED feedback
+│   ├── usb_descriptors.c   # USB device identity + TinyUSB callbacks
 │   └── test_crypto.c        # Crypto test + timing benchmarks
 ├── bridge/
 │   └── serial_bridge.py     # UDP <-> serial forwarder for testing
@@ -94,8 +94,8 @@ phase2-rp2040/               # Phase 2 — C firmware for RP2040
 - Key handles use AES-256-CBC wrapping with HMAC-SHA256 integrity
 - Attestation cert is self-signed (fine for personal use)
 - CTAPHID packets are always 64 bytes
-- Authenticator firmware produces no text output — serial is binary-only
+- Authenticator firmware produces no text output — USB is HID-only (no serial)
 - DEBUG_CRYPTO compile flag enables verbose crypto output (test_crypto target only)
-- Master secret persists in flash — survives power cycles, lost on reflash
+- Master secret persists in flash — survives power cycles and reflash (UF2 bootloader doesn't erase storage sector)
 - Sign counter uses log-structured flash writes (~1014 auths between erases)
 - User presence requires BOOTSEL press; LED blinks during wait; KEEPALIVE packets sent to host

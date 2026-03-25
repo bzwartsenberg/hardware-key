@@ -32,19 +32,29 @@ set(COMMON_SOURCES src/crypto.c)
 set(COMMON_LIBS pico_stdlib pico_rand pico_mbedtls micro_ecc)
 
 # --- Main firmware ---
-# The authenticator uses all layers: crypto, CTAPHID transport, and U2F commands.
-# No printf/debug output — the serial port carries raw binary CTAPHID packets.
+# The authenticator presents as a USB HID device (FIDO U2F usage page 0xF1D0).
+# TinyUSB handles the USB stack; usb_descriptors.c defines the device identity.
+# No stdio — we manage USB ourselves. LED is the only debug output.
 add_executable(authenticator
     src/main.c
     src/ctaphid.c
     src/u2f.c
     src/storage.c
     src/button.c
+    src/usb_descriptors.c
     ${COMMON_SOURCES}
 )
 target_include_directories(authenticator PRIVATE include)
-target_link_libraries(authenticator ${COMMON_LIBS} hardware_flash hardware_sync)
-pico_enable_stdio_usb(authenticator 1)
+# tinyusb_device: the TinyUSB device stack (replaces pico_enable_stdio_usb)
+# tinyusb_board: board-level init (board_init() — sets up USB PHY and clocks)
+target_link_libraries(authenticator
+    ${COMMON_LIBS}
+    hardware_flash hardware_sync
+    tinyusb_device tinyusb_board
+)
+# No stdio on USB — we use TinyUSB directly for HID
+# No stdio on UART — no UART wired up (could enable for debug with FTDI cable)
+pico_enable_stdio_usb(authenticator 0)
 pico_enable_stdio_uart(authenticator 0)
 pico_add_extra_outputs(authenticator)
 

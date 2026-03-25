@@ -28,9 +28,9 @@ python test_fido2_client.py          # test with official python-fido2 library
 python test_client.py                # hand-rolled test with phishing detection
 ```
 
-### Phase 2 — RP2040 C firmware (in progress)
+### Phase 2 — RP2040 C firmware (complete)
 
-The same authenticator ported to C, running on an RP2040 Pro Micro. Communicates over USB serial with a Python bridge that translates to/from UDP, so the Phase 1 test clients work unchanged.
+The same authenticator ported to C, running on an RP2040 Pro Micro. Presents as a native USB HID device (FIDO usage page 0xF1D0) — browsers and OS WebAuthn APIs talk to it directly, no bridge needed.
 
 **Prerequisites:**
 - [Pico SDK](https://github.com/raspberrypi/pico-sdk) installed (set `PICO_SDK_PATH` env var)
@@ -51,16 +51,15 @@ cp build/authenticator.uf2 /Volumes/RPI-RP2/
 ```
 Wait for the LED to blink twice (device ready).
 
-**Test end-to-end:**
+**Test with Python (native HID):**
 ```bash
-# Terminal 1: start the serial bridge
-cd phase2-rp2040/bridge
-python serial_bridge.py /dev/cu.usbmodem*
-
-# Terminal 2: run test client
-cd phase1-python-udp
-python test_fido2_client.py
+source .venv/bin/activate
+python test_hid.py
 ```
+Press BOOTSEL when the LED blinks to approve register/authenticate requests.
+
+**Test with serial bridge (legacy):**
+The serial bridge is still available for testing with Phase 1 UDP clients. Requires building the firmware with `pico_enable_stdio_usb` re-enabled (see git history).
 
 **Run crypto benchmarks:**
 ```bash
@@ -71,33 +70,29 @@ screen /dev/cu.usbmodem* 115200    # exit: Ctrl-A then \
 ## Architecture
 
 ```
-[Browser/Client]
+[Browser / WebAuthn API]
        |
-       | UDP (port 7112)
-       |
-[serial_bridge.py]  ← translates UDP <-> serial
-       |
-       | USB CDC serial (raw binary, 64-byte packets)
+       | USB HID (FIDO usage page 0xF1D0, 64-byte interrupt transfers)
        |
 [RP2040 firmware]
-  ├── main.c       — packet I/O loop
-  ├── ctaphid.c    — CTAPHID transport (framing, channels, reassembly)
-  ├── u2f.c        — U2F commands (register, authenticate, attestation cert)
-  ├── crypto.c     — ECDSA P-256, AES-256-CBC key wrapping, SHA-256
-  ├── storage.c    — flash persistence (master secret + sign counter)
-  └── button.c     — user presence via BOOTSEL button
+  ├── main.c             — USB HID event loop (TinyUSB)
+  ├── usb_descriptors.c  — USB device identity (descriptors + TinyUSB callbacks)
+  ├── ctaphid.c          — CTAPHID transport (framing, channels, reassembly)
+  ├── u2f.c              — U2F commands (register, authenticate, attestation cert)
+  ├── crypto.c           — ECDSA P-256, AES-256-CBC key wrapping, SHA-256
+  ├── storage.c          — flash persistence (master secret + sign counter)
+  └── button.c           — user presence via BOOTSEL button
 ```
 
 ## What's next
 
-- USB HID — Replace serial bridge with native USB HID device class
-- Keyboard integration — Embed into a custom mechanical keyboard
+- Keyboard integration — Embed into a custom mechanical keyboard (USB composite: HID keyboard + HID FIDO)
 
 ## Production-readiness TODOs
 
 Things to address before this becomes a real daily-use authenticator:
 
-- **Protect master secret during reflash** — Currently flashing new firmware erases the storage sector, invalidating all registered credentials. The master secret should survive firmware updates and only be erasable via an explicit factory reset.
+- **Verify master secret survives reflash** — The UF2 bootloader appears to only erase sectors covered by the firmware binary, so the storage sector (last 4KB) survives. This needs deliberate verification — if it's reliable, add an explicit factory reset mechanism. If not, reserve a flash region or use RP2040 OTP fuses.
 - **Two-sector ping-pong storage** — The flash storage has a brief window (~50ms every ~1014 authentications) where the master secret only lives in RAM during sector rebuild. Using two alternating sectors eliminates this: write to the inactive sector first, then switch. Cost: 4KB extra flash.
 - **Full CTAPHID channel multiplexing** — Currently supports one pending message at a time with no channel ID validation. For real USB HID with concurrent clients: track allocated channels, support per-channel reassembly, reject unallocated channels.
 
